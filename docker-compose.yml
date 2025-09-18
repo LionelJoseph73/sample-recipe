@@ -1,0 +1,99 @@
+# File: docker-compose.yml
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15
+    container_name: signrecipes_db
+    environment:
+      POSTGRES_DB: signrecipes
+      POSTGRES_USER: signrecipes_user
+      POSTGRES_PASSWORD: your_secure_password
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database_schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U signrecipes_user -d signrecipes"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # FastAPI Backend
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: signrecipes_backend
+    environment:
+      DATABASE_URL: postgresql://signrecipes_user:your_secure_password@postgres:5432/signrecipes
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      CORS_ORIGINS: http://localhost:3000,http://localhost
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - uploaded_files:/app/uploads
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/docs"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # React Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: signrecipes_frontend
+    environment:
+      REACT_APP_API_URL: http://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+
+  # Redis for caching (optional)
+  redis:
+    image: redis:7-alpine
+    container_name: signrecipes_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+
+  # Nginx reverse proxy (production)
+  nginx:
+    image: nginx:alpine
+    container_name: signrecipes_nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf
+      - ./ssl:/etc/nginx/ssl
+    depends_on:
+      - backend
+      - frontend
+    profiles:
+      - production
+
+volumes:
+  postgres_data:
+  redis_data:
+  uploaded_files:
+
+networks:
+  default:
+    name: signrecipes_network
